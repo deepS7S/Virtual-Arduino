@@ -24,12 +24,17 @@ from PyQt5.QtWidgets import (
 
 from core.constants import APP_NAME, APP_VERSION, PROJECT_FILE_FILTER
 from core.project import Project, ProjectError, ProjectLoadError, ProjectSaveError
-from core.recent_projects import RecentProjectsManager
+from core.config import get_config
 from ui.new_project_dialog import NewProjectDialog
 from ui.theme import BG_DARKEST
 
 
 class StartScreen(QWidget):
+    """
+    Стартовое окно приложения. При успешном создании или открытии проекта
+    вызывает self.on_project_ready(project), которую должен переопределить
+    или подключить вызывающий код (см. main.py).
+    """
 
     def __init__(self):
         super().__init__()
@@ -37,7 +42,7 @@ class StartScreen(QWidget):
         self.resize(640, 440)
         self.setStyleSheet(f"background-color: {BG_DARKEST};")
 
-        self.recent_manager = RecentProjectsManager()
+        self.config = get_config()
         self.on_project_ready = None
 
         self._build_ui()
@@ -85,7 +90,7 @@ class StartScreen(QWidget):
 
     def _populate_recent_list(self) -> None:
         self.recent_list.clear()
-        recents = self.recent_manager.get_all()
+        recents = self.config.get_recent_projects()
         if not recents:
             placeholder = QListWidgetItem("Нет недавних проектов")
             placeholder.setFlags(Qt.NoItemFlags)
@@ -94,12 +99,16 @@ class StartScreen(QWidget):
 
         for path_str in recents:
             path = Path(path_str)
+            if not path.exists():
+                continue
             item = QListWidgetItem(f"{path.stem}    —    {path}")
             item.setData(Qt.UserRole, path_str)
             self.recent_list.addItem(item)
 
     def _on_new_project(self) -> None:
-        dialog = NewProjectDialog(self)
+        # Передаём директорию по умолчанию из конфига
+        default_dir = str(self.config.get_projects_directory())
+        dialog = NewProjectDialog(self, default_directory=default_dir)
         if dialog.exec_() != NewProjectDialog.Accepted:
             return
 
@@ -110,12 +119,14 @@ class StartScreen(QWidget):
             QMessageBox.critical(self, "Ошибка создания проекта", str(exc))
             return
 
-        self.recent_manager.add(project.file_path)
+        self.config.add_recent_project(project.file_path)
         self._open_project(project)
 
     def _on_open_project(self) -> None:
+        # Начинаем с директории по умолчанию
+        default_dir = str(self.config.get_projects_directory())
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Открыть проект", str(Path.home()), PROJECT_FILE_FILTER
+            self, "Открыть проект", default_dir, PROJECT_FILE_FILTER
         )
         if not file_path:
             return
@@ -132,14 +143,14 @@ class StartScreen(QWidget):
             project = Project.load(file_path)
         except ProjectLoadError as exc:
             QMessageBox.critical(self, "Ошибка открытия проекта", str(exc))
-            self.recent_manager.remove(file_path)
+            self.config.remove_recent_project(file_path)
             self._populate_recent_list()
             return
         except ProjectError as exc:
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
 
-        self.recent_manager.add(file_path)
+        self.config.add_recent_project(file_path)
         self._open_project(project)
 
     def _open_project(self, project: Project) -> None:

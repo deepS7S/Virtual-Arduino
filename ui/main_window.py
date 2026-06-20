@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.config import get_config
 from core.constants import APP_NAME, PROJECT_FILE_FILTER
 from core.project import Project, ProjectError, ProjectLoadError, ProjectSaveError
 from core.recent_projects import RecentProjectsManager
@@ -202,6 +203,9 @@ class MainWindow(QWidget):
         self.project.circuit_data = self.circuit_scene.to_dict()
         try:
             self.project.save()
+            # Добавляем в недавние
+            config = get_config()
+            config.add_recent_project(self.project.file_path)
         except ProjectSaveError as exc:
             QMessageBox.critical(self, "Ошибка сохранения", str(exc))
             return

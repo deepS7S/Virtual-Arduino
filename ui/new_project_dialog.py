@@ -20,21 +20,32 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QCheckBox,
 )
 
 from core.constants import BoardType
+from core.config import get_config
 
 
 class NewProjectDialog(QDialog):
+    """Диалог создания нового проекта."""
 
     def __init__(self, parent=None, default_directory: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Новый проект")
         self.setMinimumWidth(420)
 
+        # Получаем конфигурацию
+        self.config = get_config()
+
+        # Если директория не указана, берём из конфига
+        if not default_directory:
+            default_directory = str(self.config.get_projects_directory())
+
         self._project_name: str = ""
-        self._project_directory: str = default_directory or str(Path.home())
+        self._project_directory: str = default_directory
         self._board: BoardType = BoardType.UNO
+        self._save_as_default: bool = False
 
         self._build_ui()
 
@@ -54,6 +65,10 @@ class NewProjectDialog(QDialog):
         location_row.addWidget(self.location_edit)
         location_row.addWidget(self.browse_button)
         form.addRow("Расположение:", location_row)
+
+        self.default_checkbox = QCheckBox("Использовать эту папку как директорию по умолчанию")
+        self.default_checkbox.setChecked(False)
+        form.addRow("", self.default_checkbox)
 
         self.board_combo = QComboBox()
         self.board_combo.addItems(BoardType.available_values())
@@ -107,7 +122,9 @@ class NewProjectDialog(QDialog):
         if not directory:
             QMessageBox.warning(self, "Ошибка", "Укажите папку для сохранения проекта.")
             return
-        if not Path(directory).exists():
+
+        dir_path = Path(directory)
+        if not dir_path.exists():
             answer = QMessageBox.question(
                 self,
                 "Папка не найдена",
@@ -115,12 +132,23 @@ class NewProjectDialog(QDialog):
             )
             if answer != QMessageBox.Yes:
                 return
+            try:
+                dir_path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось создать папку:\n{e}")
+                return
 
         self._project_name = name
         self._project_directory = directory
         self._board = BoardType(self.board_combo.currentText())
+        self._save_as_default = self.default_checkbox.isChecked()
+
+        # Если отмечено, сохраняем как директорию по умолчанию
+        if self._save_as_default:
+            self.config.set_projects_directory(dir_path)
+
         self.accept()
 
-
     def get_result(self):
+        """Возвращает (имя_проекта, директория, тип_платы) после подтверждения."""
         return self._project_name, self._project_directory, self._board

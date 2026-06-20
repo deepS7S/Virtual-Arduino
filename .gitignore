@@ -1,8 +1,11 @@
 # idea
 .idea/
 
-# Projects
+# Local Projects
 Projects/
+
+# Local Configs
+config.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
