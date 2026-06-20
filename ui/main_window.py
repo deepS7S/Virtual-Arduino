@@ -1,0 +1,241 @@
+"""
+Главное окно приложения, оформленное в стиле Arduino IDE 2.3.6.
+"""
+
+from pathlib import Path
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.constants import APP_NAME, PROJECT_FILE_FILTER
+from core.project import Project, ProjectError, ProjectLoadError, ProjectSaveError
+from core.recent_projects import RecentProjectsManager
+from ui.circuit_view import CircuitScene, CircuitView
+from ui.code_panel import CodePanel
+from ui.components_panel import ComponentsPanel
+from ui.theme import ACCENT, BG_ACTIVITY_BAR, BG_ELEVATED
+
+
+class MainWindow(QWidget):
+
+    SIDE_PANEL_WIDTH = 340
+
+    def __init__(self, project):
+        super().__init__()
+        self.project = project
+        self.recent_manager = RecentProjectsManager()
+
+        self.setWindowTitle("%s | %s" % (self.project.name, APP_NAME))
+        self.resize(1280, 800)
+
+        self._build_ui()
+        self._load_project_into_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.circuit_scene = CircuitScene()
+        self.circuit_view = CircuitView(self.circuit_scene)
+
+        self.side_panel = QStackedWidget()
+        self.side_panel.setFixedWidth(self.SIDE_PANEL_WIDTH)
+        self.code_panel = CodePanel()
+        self.components_panel = ComponentsPanel()
+        self.components_panel.component_chosen.connect(self._on_component_chosen)
+        self.side_panel.addWidget(self.code_panel)
+        self.side_panel.addWidget(self.components_panel)
+        self.side_panel.hide()
+
+        root.addWidget(self._build_toolbar())
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        body.addWidget(self._build_activity_bar())
+        body.addWidget(self.side_panel)
+        body.addWidget(self.circuit_view, stretch=1)
+
+        root.addLayout(body, stretch=1)
+        root.addWidget(self._build_status_bar())
+
+    def _build_toolbar(self):
+        bar = QWidget()
+        bar.setStyleSheet("background-color: %s; border-bottom: 1px solid #1b1b1b;" % BG_ELEVATED)
+        bar.setFixedHeight(42)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(6)
+
+        new_btn = QPushButton("Новый")
+        new_btn.clicked.connect(self._on_new_project)
+        open_btn = QPushButton("Открыть")
+        open_btn.clicked.connect(self._on_open_project)
+        save_btn = QPushButton("Сохранить")
+        save_btn.setObjectName("PrimaryButton")
+        save_btn.clicked.connect(self._on_save_project)
+
+        for b in (new_btn, open_btn, save_btn):
+            b.setFixedHeight(32)
+            layout.addWidget(b)
+
+        layout.addStretch()
+
+        # Кнопка координат курсора
+        coords_btn = QPushButton("CursCoord")
+        coords_btn.setFixedSize(100, 32)
+        coords_btn.setToolTip("Показать координаты курсора (Ctrl+Shift+C)")
+        coords_btn.clicked.connect(self.circuit_view.toggle_cursor_coords)
+        layout.addWidget(coords_btn)
+
+        # Кнопка отладки
+        debug_btn = QPushButton("Debug")
+        debug_btn.setFixedSize(70, 32)
+        debug_btn.setToolTip("Показать все координаты (Ctrl+D)")
+        debug_btn.clicked.connect(self.circuit_view.debug_coordinator.dump_coordinates)
+        layout.addWidget(debug_btn)
+
+        # Зум экрана эмулятора
+        zoom_out_btn = QPushButton("-")
+        zoom_out_btn.setFixedSize(38, 28)
+        zoom_out_btn.clicked.connect(lambda: self.circuit_view.scale(1 / 1.15, 1 / 1.15))
+        zoom_reset_btn = QPushButton("Сброс вида")
+        zoom_reset_btn.setFixedHeight(32)
+        zoom_reset_btn.clicked.connect(self.circuit_view.reset_zoom)
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setFixedSize(38, 28)
+        zoom_in_btn.clicked.connect(lambda: self.circuit_view.scale(1.15, 1.15))
+        for b in (zoom_out_btn, zoom_reset_btn, zoom_in_btn):
+            layout.addWidget(b)
+
+        return bar
+
+    def _build_activity_bar(self):
+        bar = QWidget()
+        bar.setFixedWidth(48)
+        bar.setStyleSheet("background-color: %s; border-right: 1px solid #1b1b1b;" % BG_ACTIVITY_BAR)
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignTop)
+
+        self.code_toggle_btn = QPushButton("</>")
+        self.code_toggle_btn.setObjectName("ActivityButton")
+        self.code_toggle_btn.setCheckable(True)
+        self.code_toggle_btn.setFixedSize(48, 44)
+        self.code_toggle_btn.setToolTip("Показать/скрыть редактор кода")
+        self.code_toggle_btn.clicked.connect(self._toggle_code_panel)
+
+        self.components_toggle_btn = QPushButton("\u2699")
+        self.components_toggle_btn.setObjectName("ActivityButton")
+        self.components_toggle_btn.setCheckable(True)
+        self.components_toggle_btn.setFixedSize(48, 44)
+        self.components_toggle_btn.setToolTip("Показать/скрыть панель компонентов")
+        self.components_toggle_btn.clicked.connect(self._toggle_components_panel)
+
+        for b in (self.code_toggle_btn, self.components_toggle_btn):
+            b.setStyleSheet(b.styleSheet() + "font-size: 16px;")
+            layout.addWidget(b)
+
+        return bar
+
+    def _build_status_bar(self):
+        bar = QWidget()
+        bar.setFixedHeight(24)
+        bar.setStyleSheet("background-color: %s; color: white;" % ACCENT)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 0, 10, 0)
+        self.status_label = QLabel("Готово")
+        self.status_label.setStyleSheet("color: white; font-size: 11px;")
+        layout.addWidget(self.status_label)
+        layout.addStretch()
+        self.board_label = QLabel("Плата: Arduino UNO")
+        self.board_label.setStyleSheet("color: white; font-size: 11px;")
+        layout.addWidget(self.board_label)
+        return bar
+
+    def _toggle_code_panel(self):
+        if self.side_panel.isVisible() and self.side_panel.currentWidget() is self.code_panel:
+            self.side_panel.hide()
+            self.code_toggle_btn.setChecked(False)
+            return
+        self.components_toggle_btn.setChecked(False)
+        self.side_panel.setCurrentWidget(self.code_panel)
+        self.side_panel.show()
+        self.code_toggle_btn.setChecked(True)
+
+    def _toggle_components_panel(self):
+        if self.side_panel.isVisible() and self.side_panel.currentWidget() is self.components_panel:
+            self.side_panel.hide()
+            self.components_toggle_btn.setChecked(False)
+            return
+        self.code_toggle_btn.setChecked(False)
+        self.side_panel.setCurrentWidget(self.components_panel)
+        self.side_panel.show()
+        self.components_toggle_btn.setChecked(True)
+
+    def _on_component_chosen(self, component_type):
+        center = self.circuit_view.mapToScene(self.circuit_view.viewport().rect().center())
+        self.circuit_scene.add_component(component_type, center)
+        self.status_label.setText("Компонент добавлен: %s" % component_type)
+
+    def _load_project_into_ui(self):
+        self.code_panel.set_code(self.project.source_code)
+        if self.project.circuit_data:
+            self.circuit_scene.load_from_dict(self.project.circuit_data)
+        self.setWindowTitle("%s | %s" % (self.project.name, APP_NAME))
+        self.board_label.setText("Плата: %s" % self.project.board.value)
+
+    def _on_save_project(self):
+        self.project.source_code = self.code_panel.get_code()
+        self.project.circuit_data = self.circuit_scene.to_dict()
+        try:
+            self.project.save()
+        except ProjectSaveError as exc:
+            QMessageBox.critical(self, "Ошибка сохранения", str(exc))
+            return
+        self.status_label.setText("Проект сохранён")
+
+    def _on_open_project(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Открыть проект", str(Path.home()), PROJECT_FILE_FILTER
+        )
+        if not file_path:
+            return
+        try:
+            project = Project.load(Path(file_path))
+        except (ProjectLoadError, ProjectError) as exc:
+            QMessageBox.critical(self, "Ошибка открытия проекта", str(exc))
+            return
+        self.recent_manager.add(project.file_path)
+        self.project = project
+        self._load_project_into_ui()
+
+    def _on_new_project(self):
+        from ui.new_project_dialog import NewProjectDialog
+
+        dialog = NewProjectDialog(self)
+        if dialog.exec_() != NewProjectDialog.Accepted:
+            return
+        name, directory, board = dialog.get_result()
+        try:
+            project = Project.create_new(name=name, board=board, directory=Path(directory))
+        except ProjectSaveError as exc:
+            QMessageBox.critical(self, "Ошибка создания проекта", str(exc))
+            return
+        self.recent_manager.add(project.file_path)
+        self.project = project
+        self.circuit_scene.load_from_dict({"components": [], "wires": []})
+        self._load_project_into_ui()
+
