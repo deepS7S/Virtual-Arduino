@@ -26,8 +26,8 @@ class ComponentsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"background-color: {BG_DARK};")
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(320)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(400)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)

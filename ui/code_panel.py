@@ -16,7 +16,8 @@ class CodePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background-color: %s;" % BG_DARK)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(300)
+        self.setMaximumWidth(800)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 12, 8, 8)

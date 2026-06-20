@@ -14,12 +14,12 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QSplitter,
 )
 
-from core.config import get_config
 from core.constants import APP_NAME, PROJECT_FILE_FILTER
 from core.project import Project, ProjectError, ProjectLoadError, ProjectSaveError
-from core.recent_projects import RecentProjectsManager
+from core.config import get_config
 from ui.circuit_view import CircuitScene, CircuitView
 from ui.code_panel import CodePanel
 from ui.components_panel import ComponentsPanel
@@ -27,13 +27,12 @@ from ui.theme import ACCENT, BG_ACTIVITY_BAR, BG_ELEVATED
 
 
 class MainWindow(QWidget):
-
-    SIDE_PANEL_WIDTH = 340
+    """Главное окно IDE."""
 
     def __init__(self, project):
         super().__init__()
         self.project = project
-        self.recent_manager = RecentProjectsManager()
+        self.config = get_config()
 
         self.setWindowTitle("%s | %s" % (self.project.name, APP_NAME))
         self.resize(1280, 800)
@@ -46,18 +45,62 @@ class MainWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # Создаём сцену и вид
         self.circuit_scene = CircuitScene()
-        self.circuit_view = CircuitView(self.circuit_scene)
+        self.circuit_view = CircuitView(self.circuit_scene, self)
 
-        self.side_panel = QStackedWidget()
-        self.side_panel.setFixedWidth(self.SIDE_PANEL_WIDTH)
+        # Создаём панели
         self.code_panel = CodePanel()
         self.components_panel = ComponentsPanel()
         self.components_panel.component_chosen.connect(self._on_component_chosen)
-        self.side_panel.addWidget(self.code_panel)
-        self.side_panel.addWidget(self.components_panel)
-        self.side_panel.hide()
 
+        # Создаём QSplitter для боковых панелей
+        self.side_splitter = QSplitter(Qt.Horizontal)
+        self.side_splitter.setChildrenCollapsible(False)
+        self.side_splitter.setHandleWidth(4)
+        self.side_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #2b2b2b;
+                width: 4px;
+            }
+            QSplitter::handle:hover {
+                background-color: #00979D;
+            }
+        """)
+
+        # Добавляем панели в сплиттер
+        self.side_splitter.addWidget(self.code_panel)
+        self.side_splitter.addWidget(self.components_panel)
+
+        # Устанавливаем начальные ширины (пропорции)
+        self.side_splitter.setSizes([400, 260])  # [код, компоненты]
+        self.side_splitter.setCollapsible(0, False)
+        self.side_splitter.setCollapsible(1, False)
+
+        # Скрываем панели по умолчанию
+        self.code_panel.hide()
+        self.components_panel.hide()
+
+        # Основной сплиттер между панелями и схемой
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(4)
+        self.main_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #2b2b2b;
+                width: 4px;
+            }
+            QSplitter::handle:hover {
+                background-color: #00979D;
+            }
+        """)
+
+        self.main_splitter.addWidget(self.side_splitter)
+        self.main_splitter.addWidget(self.circuit_view)
+        self.main_splitter.setSizes([400, 880])  # [панели, схема]
+        self.main_splitter.setCollapsible(0, False)
+
+        # Добавляем тулбар и основной контент
         root.addWidget(self._build_toolbar())
 
         body = QHBoxLayout()
@@ -65,8 +108,7 @@ class MainWindow(QWidget):
         body.setSpacing(0)
 
         body.addWidget(self._build_activity_bar())
-        body.addWidget(self.side_panel)
-        body.addWidget(self.circuit_view, stretch=1)
+        body.addWidget(self.main_splitter, stretch=1)
 
         root.addLayout(body, stretch=1)
         root.addWidget(self._build_status_bar())
@@ -167,24 +209,34 @@ class MainWindow(QWidget):
         return bar
 
     def _toggle_code_panel(self):
-        if self.side_panel.isVisible() and self.side_panel.currentWidget() is self.code_panel:
-            self.side_panel.hide()
+        """Показывает/скрывает панель кода."""
+        if self.code_panel.isVisible():
+            self.code_panel.hide()
             self.code_toggle_btn.setChecked(False)
-            return
-        self.components_toggle_btn.setChecked(False)
-        self.side_panel.setCurrentWidget(self.code_panel)
-        self.side_panel.show()
-        self.code_toggle_btn.setChecked(True)
+            # Обновляем сплиттер
+            self.main_splitter.setSizes([self.side_splitter.size().width() - self.code_panel.width(),
+                                         self.circuit_view.width() + self.code_panel.width()])
+        else:
+            self.code_panel.show()
+            self.code_toggle_btn.setChecked(True)
+            # Обновляем сплиттер
+            self.main_splitter.setSizes([self.side_splitter.size().width() + self.code_panel.width(),
+                                         self.circuit_view.width() - self.code_panel.width()])
 
     def _toggle_components_panel(self):
-        if self.side_panel.isVisible() and self.side_panel.currentWidget() is self.components_panel:
-            self.side_panel.hide()
+        """Показывает/скрывает панель компонентов."""
+        if self.components_panel.isVisible():
+            self.components_panel.hide()
             self.components_toggle_btn.setChecked(False)
-            return
-        self.code_toggle_btn.setChecked(False)
-        self.side_panel.setCurrentWidget(self.components_panel)
-        self.side_panel.show()
-        self.components_toggle_btn.setChecked(True)
+            # Обновляем сплиттер
+            self.main_splitter.setSizes([self.side_splitter.size().width() - self.components_panel.width(),
+                                         self.circuit_view.width() + self.components_panel.width()])
+        else:
+            self.components_panel.show()
+            self.components_toggle_btn.setChecked(True)
+            # Обновляем сплиттер
+            self.main_splitter.setSizes([self.side_splitter.size().width() + self.components_panel.width(),
+                                         self.circuit_view.width() - self.components_panel.width()])
 
     def _on_component_chosen(self, component_type):
         center = self.circuit_view.mapToScene(self.circuit_view.viewport().rect().center())
@@ -203,9 +255,7 @@ class MainWindow(QWidget):
         self.project.circuit_data = self.circuit_scene.to_dict()
         try:
             self.project.save()
-            # Добавляем в недавние
-            config = get_config()
-            config.add_recent_project(self.project.file_path)
+            self.config.add_recent_project(self.project.file_path)
         except ProjectSaveError as exc:
             QMessageBox.critical(self, "Ошибка сохранения", str(exc))
             return
@@ -222,7 +272,7 @@ class MainWindow(QWidget):
         except (ProjectLoadError, ProjectError) as exc:
             QMessageBox.critical(self, "Ошибка открытия проекта", str(exc))
             return
-        self.recent_manager.add(project.file_path)
+        self.config.add_recent_project(project.file_path)
         self.project = project
         self._load_project_into_ui()
 
@@ -238,7 +288,7 @@ class MainWindow(QWidget):
         except ProjectSaveError as exc:
             QMessageBox.critical(self, "Ошибка создания проекта", str(exc))
             return
-        self.recent_manager.add(project.file_path)
+        self.config.add_recent_project(project.file_path)
         self.project = project
         self.circuit_scene.load_from_dict({"components": [], "wires": []})
         self._load_project_into_ui()
