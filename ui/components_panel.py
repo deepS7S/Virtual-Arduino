@@ -26,20 +26,33 @@ class ComponentsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"background-color: {BG_DARK};")
-        self.setMinimumWidth(200)
-        self.setMaximumWidth(400)
+        self.setFixedWidth(310)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("КОМПОНЕНТЫ")
-        title.setObjectName("SectionLabel")
+        title = QLabel("Компоненты")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("""
+            QLabel {
+                color: #00979D;
+                font-weight: 600;
+                text-transform: uppercase;
+                font-size: 16px;
+                letter-spacing: 1px;
+                padding: 4px 0px 8px 0px;
+            }
+        """)
         layout.addWidget(title)
 
         hint = QLabel("Выберите компонент, чтобы добавить его на схему")
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        hint.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-size: 11px;
+            padding: 2px;
+        """)
         layout.addWidget(hint)
 
         self.list_widget = QListWidget()
@@ -62,7 +75,11 @@ class ComponentsPanel(QWidget):
             "Delete — удалить выделенный провод/компонент."
         )
         wires_hint.setWordWrap(True)
-        wires_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; padding-top: 8px;")
+        wires_hint.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-size: 11px;
+            padding: 2px;
+        """)
         layout.addWidget(wires_hint)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:

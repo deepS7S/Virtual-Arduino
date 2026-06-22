@@ -54,6 +54,8 @@ class MainWindow(QWidget):
         self.components_panel = ComponentsPanel()
         self.components_panel.component_chosen.connect(self._on_component_chosen)
 
+        self.components_panel.setFixedWidth(310)
+
         # Создаём QSplitter для боковых панелей
         self.side_splitter = QSplitter(Qt.Horizontal)
         self.side_splitter.setChildrenCollapsible(False)
@@ -71,6 +73,9 @@ class MainWindow(QWidget):
         # Добавляем панели в сплиттер
         self.side_splitter.addWidget(self.code_panel)
         self.side_splitter.addWidget(self.components_panel)
+
+        self.side_splitter.setStretchFactor(0, 1)
+        self.side_splitter.setStretchFactor(1, 0)
 
         # Устанавливаем начальные ширины (пропорции)
         self.side_splitter.setSizes([400, 260])  # [код, компоненты]
