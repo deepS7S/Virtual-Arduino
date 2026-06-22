@@ -1,7 +1,13 @@
 """
-Боковая панель редактора кода. Открывается кнопкой на узкой "activity bar"
-слева (рядом с кнопкой компонентов). Оборачивает CodeEditor заголовком
-и кнопкой базовой проверки синтаксиса.
+Боковая панель редактора кода.
+
+Изменения (чек-лист п.3):
+  - Кнопка «Проверить» вызывает полноценную проверку через
+    core/sketch_interpreter.check_syntax() (теперь прокинута из CodeEditor).
+  - on_errors_changed колбэк: редактор вызывает CodePanel автоматически
+    при каждом дебаунс-тике (600 мс после ввода) — статус обновляется
+    в реальном времени без нажатия кнопки.
+  - Статус-строка показывает все ошибки, а не только первые несколько.
 """
 
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
@@ -35,6 +41,9 @@ class CodePanel(QWidget):
         layout.addLayout(header_row)
 
         self.editor = CodeEditor()
+        # Подключаем колбэк: при каждой автопроверке редактор сообщает нам
+        # об ошибках и мы обновляем статус-строку без нажатия кнопки.
+        self.editor.on_errors_changed = self._show_errors
         layout.addWidget(self.editor, stretch=1)
 
         self.status_label = QLabel("Готово")
@@ -49,11 +58,17 @@ class CodePanel(QWidget):
         return self.editor.toPlainText()
 
     def _on_check_syntax(self):
+        """Ручная проверка по кнопке — немедленная, без дебаунса."""
         errors = self.editor.check_syntax()
+        self.editor.apply_error_marks(errors)
+        self._show_errors(errors)
+
+    def _show_errors(self, errors):
         if not errors:
             self.status_label.setStyleSheet("color: %s; font-size: 11px;" % SUCCESS)
             self.status_label.setText("Синтаксических ошибок не найдено.")
         else:
             self.status_label.setStyleSheet("color: %s; font-size: 11px;" % ERROR)
-            messages = "; ".join("строка %d: %s" % (line, msg) for line, msg in errors[:5])
-            self.status_label.setText("Найдены ошибки: %s" % messages)
+            lines = "; ".join("строка %d: %s" % (line, msg) for line, msg in errors[:5])
+            suffix = " ещё %d..." % (len(errors) - 5) if len(errors) > 5 else ""
+            self.status_label.setText("Ошибки: %s%s" % (lines, suffix))

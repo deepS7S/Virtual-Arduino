@@ -399,3 +399,34 @@ def build_uno_pins() -> list:
     })
 
     return pins
+
+
+# Канонические ключи пинов — используются новым движком симуляции
+# (core/sketch_interpreter.py, core/electrical_engine.py), чтобы связать
+# номер пина из скетча ("pinMode(13, OUTPUT)", "analogRead(A0)") с конкретным
+# физическим пином платы из build_uno_pins().
+# Добавлено без изменения существующей логики раскладки пинов выше.
+POWER_PIN_KEYS = ("5V", "VIN")
+GND_PIN_KEYS = ("GND",)
+
+
+def pin_canonical_key(label: str) -> str:
+    """
+    "~11" -> "11", "TX>1" -> "1", "RX<0" -> "0", "A0" -> "A0",
+    "GND"/"5V"/"3V3"/"VIN"/"AREF"/"RESET"/"IOREF" -> как есть.
+    """
+    if label.startswith("A") and label[1:].isdigit():
+        return label
+    if label in ("GND", "5V", "3V3", "VIN", "AREF", "RESET", "IOREF"):
+        return label
+    digits = "".join(ch for ch in label if ch.isdigit())
+    return digits if digits else label
+
+
+def uno_pin_index_by_key() -> dict:
+    """Канонический ключ пина -> индекс в списке build_uno_pins() (первое совпадение)."""
+    mapping = {}
+    for i, pin in enumerate(build_uno_pins()):
+        key = pin_canonical_key(pin["name"])
+        mapping.setdefault(key, i)
+    return mapping

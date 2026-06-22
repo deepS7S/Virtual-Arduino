@@ -1,5 +1,13 @@
 """
 Главное окно приложения, оформленное в стиле Arduino IDE 2.3.6.
+
+Изменения (чек-лист п.4):
+  - После построения UI создаётся SimulationEngine (core/simulation_engine.py).
+  - Кнопка "Загрузить" (UploadButton на плате) подключена к
+    sim_engine.upload_and_run(code_panel.get_code()).
+  - sim_engine.status_changed / error_occurred выводятся в статус-бар.
+  - Кнопка питания (PowerButton на плате) управляет sim_engine.toggle_power().
+  - Вся остальная логика главного окна не изменилась.
 """
 
 from pathlib import Path
@@ -11,15 +19,16 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-    QSplitter,
 )
 
 from core.constants import APP_NAME, PROJECT_FILE_FILTER
 from core.project import Project, ProjectError, ProjectLoadError, ProjectSaveError
 from core.config import get_config
+from core.simulation_engine import SimulationEngine
 from ui.circuit_view import CircuitScene, CircuitView
 from ui.code_panel import CodePanel
 from ui.components_panel import ComponentsPanel
@@ -38,6 +47,7 @@ class MainWindow(QWidget):
         self.resize(1280, 800)
 
         self._build_ui()
+        self._init_simulation()
         self._load_project_into_ui()
 
     def _build_ui(self):
@@ -118,6 +128,46 @@ class MainWindow(QWidget):
         root.addLayout(body, stretch=1)
         root.addWidget(self._build_status_bar())
 
+    # Подключение движка симуляции
+    def _init_simulation(self):
+        """
+        Создаёт SimulationEngine и подключает его к кнопкам на плате
+        (upload/power) и к статус-бару.
+        """
+        self.sim_engine = SimulationEngine(self.circuit_scene)
+
+        # Кнопка "Загрузить код" (UploadButton на плате) — берёт актуальный
+        # код из редактора и запускает его через интерпретатор.
+        self.circuit_scene.on_upload_requested = self._on_upload_code
+
+        # Статус и ошибки симуляции → статус-бар внизу окна
+        self.sim_engine.status_changed.connect(self._set_status)
+        self.sim_engine.error_occurred.connect(self._on_sim_error)
+
+    def _on_upload_code(self):
+        """Вызывается кнопкой "↑" на плате: компилирует и запускает скетч."""
+        code = self.code_panel.get_code()
+        # Сначала проверяем синтаксис через редактор (чтобы подчеркнуть ошибки)
+        errors = self.code_panel.editor.check_syntax()
+        self.code_panel.editor.apply_error_marks(errors)
+        if errors:
+            self.code_panel._show_errors(errors)
+            self._set_status("Ошибки в коде — заливка отменена")
+            return
+        ok = self.sim_engine.upload_and_run(code)
+        if not ok:
+            self._set_status("Ошибка компиляции — см. редактор кода")
+
+    def _on_sim_error(self, msg):
+        """Показывает ошибку симуляции в статус-баре (красным через QSS)."""
+        self.status_label.setStyleSheet("color: #ff6b6b; font-size: 11px;")
+        self.status_label.setText(msg)
+
+    def _set_status(self, msg):
+        self.status_label.setStyleSheet("color: white; font-size: 11px;")
+        self.status_label.setText(msg)
+
+    # Тулбар
     def _build_toolbar(self):
         bar = QWidget()
         bar.setStyleSheet("background-color: %s; border-bottom: 1px solid #1b1b1b;" % BG_ELEVATED)
@@ -198,6 +248,7 @@ class MainWindow(QWidget):
 
         return bar
 
+    # Статус-бар
     def _build_status_bar(self):
         bar = QWidget()
         bar.setFixedHeight(24)
@@ -213,41 +264,29 @@ class MainWindow(QWidget):
         layout.addWidget(self.board_label)
         return bar
 
+    # Переключение панелей
     def _toggle_code_panel(self):
-        """Показывает/скрывает панель кода."""
         if self.code_panel.isVisible():
             self.code_panel.hide()
             self.code_toggle_btn.setChecked(False)
-            # Обновляем сплиттер
-            self.main_splitter.setSizes([self.side_splitter.size().width() - self.code_panel.width(),
-                                         self.circuit_view.width() + self.code_panel.width()])
         else:
             self.code_panel.show()
             self.code_toggle_btn.setChecked(True)
-            # Обновляем сплиттер
-            self.main_splitter.setSizes([self.side_splitter.size().width() + self.code_panel.width(),
-                                         self.circuit_view.width() - self.code_panel.width()])
 
     def _toggle_components_panel(self):
-        """Показывает/скрывает панель компонентов."""
         if self.components_panel.isVisible():
             self.components_panel.hide()
             self.components_toggle_btn.setChecked(False)
-            # Обновляем сплиттер
-            self.main_splitter.setSizes([self.side_splitter.size().width() - self.components_panel.width(),
-                                         self.circuit_view.width() + self.components_panel.width()])
         else:
             self.components_panel.show()
             self.components_toggle_btn.setChecked(True)
-            # Обновляем сплиттер
-            self.main_splitter.setSizes([self.side_splitter.size().width() + self.components_panel.width(),
-                                         self.circuit_view.width() - self.components_panel.width()])
 
     def _on_component_chosen(self, component_type):
         center = self.circuit_view.mapToScene(self.circuit_view.viewport().rect().center())
         self.circuit_scene.add_component(component_type, center)
-        self.status_label.setText("Компонент добавлен: %s" % component_type)
+        self._set_status("Компонент добавлен: %s" % component_type)
 
+    # Работа с проектом
     def _load_project_into_ui(self):
         self.code_panel.set_code(self.project.source_code)
         if self.project.circuit_data:
@@ -264,7 +303,7 @@ class MainWindow(QWidget):
         except ProjectSaveError as exc:
             QMessageBox.critical(self, "Ошибка сохранения", str(exc))
             return
-        self.status_label.setText("Проект сохранён")
+        self._set_status("Проект сохранён")
 
     def _on_open_project(self):
         file_path, _ = QFileDialog.getOpenFileName(

@@ -11,9 +11,9 @@ CircuitView   - QGraphicsView с зумом колесом мыши и пано�
 
 from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtGui import QBrush, QColor, QPainter
-from PyQt5.QtWidgets import QGraphicsScene, QGraphicsView, QMenu, QMessageBox
+from PyQt5.QtWidgets import QColorDialog, QGraphicsScene, QGraphicsView, QMenu, QMessageBox
 
-from ui.circuit_items import ArduinoUnoItem, ComponentItem, PinItem, WireItem
+from ui.circuit_items import ArduinoUnoItem, ComponentItem, PinItem, WireItem, WireNode
 from ui.component_settings_dialog import ComponentSettingsDialog
 from ui.cursor_coords import CursorCoordLabel
 from ui.debug_coords import DebugCoordinator
@@ -32,9 +32,25 @@ class CircuitScene(QGraphicsScene):
         self.board.setPos(-self.board.width / 2, -self.board.height / 2)
         self.addItem(self.board)
 
+        # кнопки питания/заливки кода прямо на плате
+        # Колбэки подключает MainWindow после создания SimulationEngine,
+        # см. main_window.py: scene.on_power_requested / scene.on_upload_requested.
+        self.on_power_requested = None
+        self.on_upload_requested = None
+        from ui.board_controls import place_board_controls
+        self.upload_button, self.power_button = place_board_controls(
+            self.board,
+            on_upload=lambda: self.on_upload_requested() if self.on_upload_requested else None,
+            on_power_toggle=lambda: self.on_power_requested() if self.on_power_requested else None,
+        )
+
         self.components = []
         self.wires = []
+        self.free_nodes = []
         self._pending_pin = None
+
+        self.power_on = False
+        self.simulation_running = False
 
     def drawBackground(self, painter, rect):
         super().drawBackground(painter, rect)
@@ -77,7 +93,19 @@ class CircuitScene(QGraphicsScene):
             for wire in pin.connected_wires:
                 wire.update_path()
 
+    def on_node_moved(self, node):
+        """Новое: обновляет геометрию проводов, прикреплённых к свободному узлу."""
+        for wire in node.connected_wires:
+            wire.update_path()
+
     def handle_pin_clicked(self, pin):
+        """
+        Клик по пину/узлу. Если уже есть незавершённое соединение —
+        завершает его проводом; иначе запоминает пин как ожидающий.
+        Работает одинаково для PinItem (пины платы/компонентов) и WireNode
+        (свободные концы проводов) — оба имеют одинаковый интерфейс
+        (scene_center/pin_id/connected_wires/_base_color).
+        """
         if self._pending_pin is None:
             self._pending_pin = pin
             pin.setBrush(QBrush(QColor("#ffffff")))
@@ -87,7 +115,7 @@ class CircuitScene(QGraphicsScene):
             self._reset_pending_pin()
             return
 
-        if pin.owner is self._pending_pin.owner:
+        if pin.owner is not None and pin.owner is self._pending_pin.owner:
             self._reset_pending_pin()
             return
 
@@ -95,6 +123,50 @@ class CircuitScene(QGraphicsScene):
         self.addItem(wire)
         self.wires.append(wire)
         self._reset_pending_pin()
+
+    def finish_pending_wire_at(self, scene_pos):
+        if self._pending_pin is None:
+            return
+        node = WireNode(scene_pos.x(), scene_pos.y())
+        self.addItem(node)
+        self.free_nodes.append(node)
+        wire = WireItem(self._pending_pin, node)
+        self.addItem(wire)
+        self.wires.append(wire)
+        self._reset_pending_pin()
+
+    def try_snap_node(self, node):
+
+        target = self._find_snap_target(node)
+        if target is None:
+            return
+
+        for wire in list(node.connected_wires):
+            if wire.start_pin is node:
+                wire.start_pin = target
+            if wire.end_pin is node:
+                wire.end_pin = target
+            target.connected_wires.append(wire)
+            wire.update_path()
+
+        node.connected_wires.clear()
+        if node in self.free_nodes:
+            self.free_nodes.remove(node)
+        self.removeItem(node)
+
+    def _find_snap_target(self, node):
+        best, best_dist = None, WireNode.SNAP_RADIUS
+        candidates = list(self.board.pins) + list(self.free_nodes)
+        for comp in self.components:
+            candidates.extend(comp.pins)
+        node_pos = node.scene_center()
+        for cand in candidates:
+            if cand is node:
+                continue
+            dist = (cand.scene_center() - node_pos).manhattanLength()
+            if dist < best_dist:
+                best, best_dist = cand, dist
+        return best
 
     def _reset_pending_pin(self):
         if self._pending_pin is not None:
@@ -106,6 +178,10 @@ class CircuitScene(QGraphicsScene):
         if wire in self.wires:
             self.wires.remove(wire)
         self.removeItem(wire)
+        for end in (wire.start_pin, wire.end_pin):
+            if isinstance(end, WireNode) and not end.connected_wires and end in self.free_nodes:
+                self.free_nodes.remove(end)
+                self.removeItem(end)
 
     def remove_selected(self):
         for item in list(self.selectedItems()):
@@ -114,23 +190,54 @@ class CircuitScene(QGraphicsScene):
             elif isinstance(item, ComponentItem):
                 self.remove_component(item)
 
+    # интеграция с core/electrical_engine.py и core/simulation_engine.py
+    def wire_pairs(self):
+        """Список (pin_id, pin_id) для всех проводов — вход для ElectricalAnalyzer."""
+        return [(w.start_pin.pin_id, w.end_pin.pin_id) for w in self.wires]
+
+    def set_power(self, on: bool):
+        self.power_on = on
+        if not on:
+            self.clear_faults()
+
+    def apply_faults(self, faults):
+        """Подсвечивает компоненты из списка Fault красным на 5 секунд."""
+        for fault in faults:
+            for comp_id in fault.component_ids:
+                for comp in self.components:
+                    if comp.instance_id == comp_id:
+                        comp.mark_fault(fault.message)
+
+    def clear_faults(self):
+        for comp in self.components:
+            comp.fault_until = 0.0
+            comp.update()
+
     def to_dict(self):
         return {
             "board": "Arduino UNO",
             "components": [c.to_dict() for c in self.components],
-            "wires": [w.to_dict() for w in self.wires],
+            "wire_nodes": [
+                {"id": n.pin_id, "x": n.pos().x(), "y": n.pos().y()} for n in self.free_nodes
+            ],
+            "wires": [
+                {"start_pin": w.start_pin.pin_id, "end_pin": w.end_pin.pin_id, "color": w.color.name()}
+                for w in self.wires
+            ],
         }
 
     def load_from_dict(self, data):
         for component in list(self.components):
             self.remove_component(component)
+        for node in list(self.free_nodes):
+            self.removeItem(node)
+        self.free_nodes = []
 
         pin_lookup = {pin.pin_id: pin for pin in self.board.pins}
 
         for comp_data in data.get("components", []):
             item = ComponentItem(comp_data["type"], instance_id=comp_data.get("instance_id"))
             item.setPos(comp_data.get("x", 0), comp_data.get("y", 0))
-            # Загружаем параметры, если есть
             if "params" in comp_data:
                 item.params = comp_data["params"]
                 item.apply_params()
@@ -139,11 +246,17 @@ class CircuitScene(QGraphicsScene):
             for pin in item.pins:
                 pin_lookup[pin.pin_id] = pin
 
+        for node_data in data.get("wire_nodes", []):
+            node = WireNode(node_data.get("x", 0), node_data.get("y", 0), pin_id=node_data.get("id"))
+            self.addItem(node)
+            self.free_nodes.append(node)
+            pin_lookup[node.pin_id] = node
+
         for wire_data in data.get("wires", []):
             start = pin_lookup.get(wire_data.get("start_pin"))
             end = pin_lookup.get(wire_data.get("end_pin"))
             if start is not None and end is not None:
-                wire = WireItem(start, end)
+                wire = WireItem(start, end, color=wire_data.get("color"))
                 self.addItem(wire)
                 self.wires.append(wire)
 
@@ -207,6 +320,13 @@ class CircuitView(QGraphicsView):
             self.scale(factor, factor)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.itemAt(event.pos()) is None:
+            scene = self.scene()
+            if getattr(scene, "_pending_pin", None) is not None:
+                scene.finish_pending_wire_at(self.mapToScene(event.pos()))
+                event.accept()
+                return
+
         if event.button() == Qt.MiddleButton or (
             event.button() == Qt.LeftButton
             and event.modifiers() == Qt.NoModifier
@@ -306,11 +426,14 @@ class CircuitView(QGraphicsView):
 
         elif isinstance(item, WireItem):
             menu = QMenu(self)
+            color_action = menu.addAction("🎨 Цвет провода...")
             delete_action = menu.addAction("🗑 Удалить провод")
             coords_action = menu.addAction("📍 Координаты курсора")
             action = menu.exec_(event.globalPos())
 
-            if action == delete_action:
+            if action == color_action:
+                self._change_wire_color(item)
+            elif action == delete_action:
                 item.setSelected(True)
                 self.scene().remove_selected()
             elif action == coords_action:
@@ -328,6 +451,14 @@ class CircuitView(QGraphicsView):
                 self.toggle_cursor_coords()
             elif action == debug_action:
                 self.debug_coordinator.dump_coordinates()
+
+    def _change_wire_color(self, wire):
+        """Новое: диалог выбора цвета провода (п. 1.3 чек-листа)."""
+        color = QColorDialog.getColor(wire.color, self, "Цвет провода")
+        if color.isValid():
+            wire.set_color(color)
+            if self.parent() and hasattr(self.parent(), 'status_label'):
+                self.parent().status_label.setText("Цвет провода изменён")
 
     def _show_component_settings(self, component):
         """Показывает диалог настроек компонента."""

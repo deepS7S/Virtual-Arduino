@@ -12,6 +12,7 @@
 """
 
 import math
+import time
 import uuid
 from pathlib import Path
 
@@ -70,6 +71,88 @@ class PinItem(QGraphicsEllipseItem):
         return self.mapToScene(0, 0)
 
 
+class WireNode(QGraphicsEllipseItem):
+    """
+    Свободная (не привязанная к компоненту) точка соединения провода.
+    Новый класс для пункта чек-листа 1.1/1.4/1.5: провод теперь — полноценный
+    объект из двух концов (PinItem ИЛИ WireNode), а не просто линия между
+    двумя существующими пинами. Узел можно:
+      - перетаскивать по полю (его конец провода тянется следом);
+      - кликнуть, чтобы начать/закончить новое соединение (как у PinItem);
+      - "уронить" рядом с другим узлом/пином — они автоматически
+        притянутся и совместятся (см. CircuitScene._try_snap_node).
+    Несколько проводов могут ссылаться на один и тот же WireNode — так
+    реализуется разветвление (1.5): достаточно, чтобы новый провод при
+    создании использовал существующий узел вместо нового.
+    """
+
+    RADIUS = 6
+    SNAP_RADIUS = 14
+
+    def __init__(self, x, y, pin_id=None):
+        super().__init__(-self.RADIUS, -self.RADIUS, self.RADIUS * 2, self.RADIUS * 2)
+        self.owner = None
+        self.pin_id = pin_id or f"NODE:{uuid.uuid4().hex[:10]}"
+        self.pin_name = "Узел провода"
+        self.setPos(x, y)
+        self._base_color = QColor("#bdbdbd")
+        self.setBrush(QBrush(self._base_color))
+        self.setPen(QPen(QColor("#000000"), 0.5))
+        self.setZValue(9)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Свободный конец провода — перетащите к пину или другому проводу")
+        self.connected_wires = []
+
+        self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)
+        self._press_scene_pos = None
+        self._dragged = False
+
+    def hoverEnterEvent(self, event):
+        self.setBrush(QBrush(QColor(WIRE_DEFAULT)))
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QBrush(self._base_color))
+        super().hoverLeaveEvent(event)
+
+    def scene_center(self):
+        return self.mapToScene(0, 0)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            scene = self.scene()
+            if scene is not None and hasattr(scene, "on_node_moved"):
+                scene.on_node_moved(self)
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        self._press_scene_pos = event.scenePos()
+        self._dragged = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press_scene_pos is not None:
+            moved = (event.scenePos() - self._press_scene_pos).manhattanLength()
+            if moved > 4:
+                self._dragged = True
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        scene = self.scene()
+        if scene is None:
+            return
+        if self._dragged:
+            if hasattr(scene, "try_snap_node"):
+                scene.try_snap_node(self)
+        else:
+            if hasattr(scene, "handle_pin_clicked"):
+                scene.handle_pin_clicked(self)
+        self._press_scene_pos = None
+        self._dragged = False
+
+
 class ComponentItem(QGraphicsItem):
     """Обобщённый компонент Arduino-набора, перетаскиваемый мышью."""
 
@@ -111,6 +194,17 @@ class ComponentItem(QGraphicsItem):
         # Применяем параметры
         self.apply_params()
 
+        # Подсветка неисправности (короткое замыкание / перегорание) -
+        # новое поле для core/electrical_engine.py, см. ui/circuit_view.py
+        self.fault_until = 0.0
+        self.fault_message = ""
+
+        # Состояние, управляемое движком симуляции (core/simulation_engine.py):
+        # светится ли LED, нажата ли кнопка, активен ли зуммер.
+        self.sim_led_lit = False
+        self.sim_pressed = False
+        self.sim_buzzer_active = False
+
     def boundingRect(self):
         return QRectF(-4, -4, self.width + 8, self.height + 8)
 
@@ -126,6 +220,19 @@ class ComponentItem(QGraphicsItem):
         painter.setBrush(QBrush(self.color))
 
         if shape == "led":
+            led_color = QColor(self.color)
+            if self.sim_led_lit:
+                painter.setBrush(QBrush(led_color.lighter(150)))
+                glow = QPen(led_color.lighter(180), 6)
+                glow.setColor(QColor(led_color.red(), led_color.green(), led_color.blue(), 90))
+                painter.save()
+                painter.setPen(glow)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QRectF(-5, -5, self.width + 10, (self.height * 0.75) + 10))
+                painter.restore()
+                painter.setBrush(QBrush(led_color.lighter(150)))
+            else:
+                painter.setBrush(QBrush(led_color.darker(160)))
             painter.drawEllipse(QRectF(0, 0, self.width, self.height * 0.75))
             painter.drawRect(QRectF(self.width * 0.25, self.height * 0.6, self.width * 0.5, self.height * 0.35))
         elif shape == "resistor":
@@ -140,8 +247,11 @@ class ComponentItem(QGraphicsItem):
                 painter.drawRect(QRectF(self.width * 0.2 + i * band_w, 0, band_w * 0.6, self.height))
         elif shape == "button":
             painter.drawRoundedRect(rect, 4, 4)
-            painter.setBrush(QBrush(QColor("#cfd8dc")))
+            cap_color = QColor("#90a4ae") if self.sim_pressed else QColor("#cfd8dc")
+            painter.setBrush(QBrush(cap_color))
             inset = self.width * 0.22
+            if self.sim_pressed:
+                inset += 2
             painter.drawRoundedRect(QRectF(inset, inset, self.width - 2 * inset, self.height - 2 * inset), 3, 3)
         elif shape == "potentiometer":
             painter.drawEllipse(rect)
@@ -158,6 +268,10 @@ class ComponentItem(QGraphicsItem):
             painter.drawEllipse(rect)
             painter.setPen(QPen(QColor("#cfd8dc"), 1))
             painter.drawEllipse(QRectF(self.width * 0.2, self.height * 0.2, self.width * 0.6, self.height * 0.6))
+            if self.sim_buzzer_active:
+                painter.setPen(QPen(QColor("#ffca28"), 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QRectF(-6, -6, self.width + 12, self.height + 12))
         elif shape == "photoresistor":
             painter.drawRoundedRect(rect, 6, 6)
             painter.setPen(QPen(QColor("#2b2b2b"), 1.5))
@@ -174,6 +288,19 @@ class ComponentItem(QGraphicsItem):
             painter.drawEllipse(QRectF(self.width * 0.38, self.height * 0.38, self.width * 0.24, self.height * 0.24))
         else:
             painter.drawRect(rect)
+
+        if self.fault_until and time.time() < self.fault_until:
+            glow_pen = QPen(QColor("#ff1744"), 3, Qt.SolidLine)
+            painter.setPen(glow_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(QRectF(-4, -4, self.width + 8, self.height + 8), 6, 6)
+
+    def mark_fault(self, message, duration_sec=5.0):
+        """Подсвечивает компонент красным на duration_sec секунд (см. electrical_engine.Fault)."""
+        self.fault_message = message
+        self.fault_until = time.time() + duration_sec
+        self.setToolTip(message)
+        self.update()
 
     def _get_resistor_bands(self, resistance):
         """Возвращает цвета для колец резистора на основе сопротивления."""
@@ -207,6 +334,23 @@ class ComponentItem(QGraphicsItem):
             if scene is not None and hasattr(scene, "on_component_moved"):
                 scene.on_component_moved(self)
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        scene = self.scene()
+        if self.component_type == "button" and scene is not None and getattr(scene, "simulation_running", False):
+            self.sim_pressed = True
+            self.update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.component_type == "button" and self.sim_pressed:
+            self.sim_pressed = False
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def to_dict(self):
         return {
@@ -352,15 +496,20 @@ class WireItem(QGraphicsPathItem):
         self.update_path()
 
     def update_path(self):
+        """Провод теперь прямая линия 'из точки А в точку Б' (п. 1.2 чек-листа)."""
         start = self.start_pin.scene_center()
         end = self.end_pin.scene_center()
         path = QPainterPath(start)
-
-        dx = (end.x() - start.x()) * 0.5
-        c1 = QPointF(start.x() + dx, start.y())
-        c2 = QPointF(end.x() - dx, end.y())
-        path.cubicTo(c1, c2, end)
+        path.lineTo(end)
         self.setPath(path)
+
+    def set_color(self, color):
+        """Новый метод: смена цвета провода через контекстное меню (п. 1.3)."""
+        self.color = QColor(color)
+        pen = self.pen()
+        pen.setColor(self.color)
+        self.setPen(pen)
+        self.update()
 
     def detach(self):
         if self in self.start_pin.connected_wires:
