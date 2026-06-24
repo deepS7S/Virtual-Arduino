@@ -109,12 +109,12 @@ def place_board_controls(board, on_upload, on_power_toggle):
     """
     chip_center_x = board.width * 0.46
     chip_center_y = board.height * 0.58
-    x = chip_center_x - BUTTON_SIZE - 26
+    x = chip_center_x - 200
 
     upload_btn = UploadButton(board, on_upload)
-    upload_btn.setPos(x, chip_center_y - BUTTON_SIZE - 6)
+    upload_btn.setPos(x + 15, chip_center_y - BUTTON_SIZE - 6 - 60)
 
     power_btn = PowerButton(board, on_power_toggle)
-    power_btn.setPos(x, chip_center_y + 6)
+    power_btn.setPos(x + 45, chip_center_y + 100 - 23)
 
     return upload_btn, power_btn
