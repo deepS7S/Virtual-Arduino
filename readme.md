@@ -54,7 +54,7 @@
 ```powershell
 # 1. Клонируйте репозиторий
 git clone https://github.com/deepS7S/Virtual-Arduino.git
-cd VirtualArduino
+cd Virtual-Arduino
 
 # 2. Создайте виртуальное окружение
 python -m venv .venv
@@ -74,7 +74,7 @@ python main.py
 ```bash
 # 1. Клонируйте репозиторий
 git clone https://github.com/deepS7S/Virtual-Arduino.git
-cd VirtualArduino
+cd Virtual-Arduino
 
 # 2. Создайте виртуальное окружение
 python3 -m venv .venv
