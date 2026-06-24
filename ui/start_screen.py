@@ -55,7 +55,7 @@ class StartScreen(QWidget):
 
         title = QLabel(APP_NAME)
         title.setObjectName("TitleLabel")
-        subtitle = QLabel(f"Версия {APP_VERSION} — Среда разработки и симуляции Arduino UNO")
+        subtitle = QLabel(f"— Среда разработки и симуляции Arduino")
         subtitle.setObjectName("SubtitleLabel")
         root.addWidget(title)
         root.addWidget(subtitle)
