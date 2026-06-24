@@ -340,6 +340,8 @@ class ComponentItem(QGraphicsItem):
         if self.component_type == "button" and scene is not None and getattr(scene, "simulation_running", False):
             self.sim_pressed = True
             self.update()
+            if hasattr(scene, "_sim_engine_ref") and scene._sim_engine_ref is not None:
+                scene._sim_engine_ref.refresh_visuals()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -348,6 +350,9 @@ class ComponentItem(QGraphicsItem):
         if self.component_type == "button" and self.sim_pressed:
             self.sim_pressed = False
             self.update()
+            scene = self.scene()
+            if scene is not None and hasattr(scene, "_sim_engine_ref") and scene._sim_engine_ref is not None:
+                scene._sim_engine_ref.refresh_visuals()
             event.accept()
             return
         super().mouseReleaseEvent(event)

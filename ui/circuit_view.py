@@ -51,6 +51,7 @@ class CircuitScene(QGraphicsScene):
 
         self.power_on = False
         self.simulation_running = False
+        self._sim_engine_ref = None
 
     def drawBackground(self, painter, rect):
         super().drawBackground(painter, rect)

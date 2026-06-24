@@ -144,6 +144,9 @@ class MainWindow(QWidget):
         self.sim_engine.status_changed.connect(self._set_status)
         self.sim_engine.error_occurred.connect(self._on_sim_error)
 
+        # Всплывающее окно с предупреждениями о неисправностях (новое)
+        self.sim_engine.faults_detected.connect(self._on_faults_popup)
+
     def _on_upload_code(self):
         """Вызывается кнопкой "↑" на плате: компилирует и запускает скетч."""
         code = self.code_panel.get_code()
@@ -157,6 +160,16 @@ class MainWindow(QWidget):
         ok = self.sim_engine.upload_and_run(code)
         if not ok:
             self._set_status("Ошибка компиляции — см. редактор кода")
+
+    def _on_faults_popup(self, messages):
+        if not messages:
+            return
+        text = "\n\n".join("⚠  " + m for m in messages)
+        QMessageBox.warning(
+            self,
+            "⚠  Обнаружены неисправности в схеме",
+            text + "\n\nКомпоненты с нарушениями подсвечены красным на схеме.",
+        )
 
     def _on_sim_error(self, msg):
         """Показывает ошибку симуляции в статус-баре (красным через QSS)."""

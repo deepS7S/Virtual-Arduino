@@ -1,9 +1,11 @@
-
 import time
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from core.components_data import GND_PIN_KEYS, POWER_PIN_KEYS, uno_pin_index_by_key
+from core.components_data import (
+    GND_PIN_KEYS, POWER_PIN_KEYS,
+    uno_pin_index_by_key, uno_all_pin_ids_by_key,
+)
 from core.electrical_engine import ElectricalAnalyzer, UnionFind
 from core.sketch_interpreter import Interpreter, SketchError, compile_sketch
 
@@ -15,11 +17,16 @@ class SimulationEngine(QObject):
 
     status_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    # Новый сигнал: список предупреждений для всплывающего окна
+    faults_detected = pyqtSignal(list)
 
     def __init__(self, scene):
         super().__init__()
         self.scene = scene
+        # Для скетча (единственный пин на ключ)
         self.pin_index = uno_pin_index_by_key()
+        # Для электрики — ВСЕ пины на ключ (GND x3, 5V x1, VIN x1 и т.д.)
+        self.all_pin_ids = uno_all_pin_ids_by_key()
         self.analyzer = ElectricalAnalyzer()
 
         self.power_on = False
@@ -31,6 +38,7 @@ class SimulationEngine(QObject):
         self.tone_state = {}
         self.log_lines = []
         self._start_time = time.time()
+        self._last_fault_time = 0.0  # не спамим предупреждениями чаще раза в 3с
 
         self.interpreter = None
         self._loop_gen = None
@@ -43,7 +51,10 @@ class SimulationEngine(QObject):
 
         scene.on_power_requested = self.toggle_power
         scene.on_upload_requested = lambda: None
+        # Даём сцене обратную ссылку на движок для мгновенного refresh при нажатии кнопки
+        scene._sim_engine_ref = self
 
+    # Питание
     def toggle_power(self):
         self.set_power(not self.power_on)
 
@@ -54,9 +65,13 @@ class SimulationEngine(QObject):
         if not on:
             self.stop()
             self._reset_component_visuals()
+        else:
+            # При подаче питания сразу проверяем неисправности
+            self._check_faults_with_popup()
         self.refresh_visuals()
         self.status_changed.emit("Питание подано (5V)" if on else "Питание отключено")
 
+    # Загрузка и запуск кода
     def upload_and_run(self, source_code):
         try:
             program = compile_sketch(source_code)
@@ -81,6 +96,9 @@ class SimulationEngine(QObject):
             self.error_occurred.emit(str(exc))
             self.interpreter = None
             return False
+
+        # После setup() — проверяем неисправности с попапом
+        self._check_faults_with_popup()
 
         self.running = True
         self.scene.simulation_running = True
@@ -128,6 +146,7 @@ class SimulationEngine(QObject):
 
         self.refresh_visuals()
 
+    # IO-интерфейс для Interpreter
     def pin_mode(self, pin, mode):
         self.pin_modes[str(pin)] = mode
 
@@ -157,10 +176,12 @@ class SimulationEngine(QObject):
         self.log_lines.append(text)
         self.status_changed.emit("Serial: %s" % text)
 
+    # Union-find по схеме
     def _build_unionfind(self):
         uf = UnionFind()
         for a, b in self.scene.wire_pairs():
             uf.union(a, b)
+        # Замкнутые кнопки соединяют пары пинов
         for comp in self.scene.components:
             if comp.component_type == "button" and getattr(comp, "sim_pressed", False) and len(comp.pins) >= 4:
                 uf.union(comp.pins[0].pin_id, comp.pins[2].pin_id)
@@ -168,17 +189,20 @@ class SimulationEngine(QObject):
         return uf
 
     def _board_pin_id(self, key):
+        """Единственный пин (для скетч-команд типа digitalRead(13))."""
         idx = self.pin_index.get(str(key))
         return None if idx is None else "UNO:%d" % idx
 
-    def _ids_for(self, keys):
+    def _all_ids_for(self, keys):
+        """ВСЕ физические pin_id для заданных ключей (5V, GND...).
+        Это исправляет главный баг: плата имеет три пина GND (индексы 1,20,21),
+        раньше учитывался только первый."""
         ids = []
         for k in keys:
-            idx = self.pin_index.get(k)
-            if idx is not None:
-                ids.append("UNO:%d" % idx)
+            ids.extend(self.all_pin_ids.get(k, []))
         return ids
 
+    # Разрешение digitalRead / analogRead через электрическую сеть
     def _resolve_digital_read(self, key):
         if not self.power_on:
             return 0
@@ -187,11 +211,13 @@ class SimulationEngine(QObject):
             return 0
         uf = self._build_unionfind()
         net = uf.find(pin_id)
-        grounded = any(uf.find(g) == net for g in self._ids_for(GND_PIN_KEYS))
+        all_gnd = self._all_ids_for(GND_PIN_KEYS)
+        grounded = any(uf.find(g) == net for g in all_gnd)
         mode = self.pin_modes.get(str(key), 0)
-        if mode == 2:
+        if mode == 2:   # INPUT_PULLUP
             return 0 if grounded else 1
-        powered = any(uf.find(p) == net for p in self._ids_for(POWER_PIN_KEYS))
+        all_pwr = self._all_ids_for(POWER_PIN_KEYS)
+        powered = any(uf.find(p) == net for p in all_pwr)
         return 1 if powered else 0
 
     def _resolve_analog_read(self, key):
@@ -207,22 +233,32 @@ class SimulationEngine(QObject):
                 continue
             wiper = comp.pins[1]
             if uf.find(wiper.pin_id) == net:
-                angle = comp.params.get("angle", 270)
-                ratio = max(0.0, min(1.0, (angle - 180.0) / 180.0))
+                angle = float((comp.params or {}).get("angle", 270))
+                ratio = max(0.0, min(1.0, (angle - 0.0) / 270.0))
                 return int(ratio * 1023)
         return 0
 
+    # ------------------------------------------------------------------
+    # Обновление визуала компонентов
+    # ------------------------------------------------------------------
     def refresh_visuals(self):
         uf = self._build_unionfind()
-        gnd_ids = set(self._ids_for(GND_PIN_KEYS))
-        power_ids = set(self._ids_for(POWER_PIN_KEYS)) if self.power_on else set()
+        all_gnd = self._all_ids_for(GND_PIN_KEYS)
+        all_pwr = self._all_ids_for(POWER_PIN_KEYS) if self.power_on else []
 
+        gnd_ids = set(all_gnd)
+        power_ids = set(all_pwr)
+
+        # Строим board_pin_states для электрического анализатора
         board_pin_states = {}
         for key, idx in self.pin_index.items():
             pin_id = "UNO:%d" % idx
-            if pin_id in gnd_ids:
+            # Учитываем все дублирующиеся пины GND/5V
+            is_gnd = any(uf.find(g) == uf.find(pin_id) for g in gnd_ids)
+            is_pwr = any(uf.find(p) == uf.find(pin_id) for p in power_ids)
+            if is_gnd:
                 role = "gnd"
-            elif pin_id in power_ids:
+            elif is_pwr:
                 role = "power"
             elif self.pin_modes.get(key) == 1 and key in self.digital_state:
                 role = "digital_high" if self.digital_state[key] else "digital_low"
@@ -230,25 +266,74 @@ class SimulationEngine(QObject):
                 role = "floating"
             board_pin_states[key] = {"role": role, "pin_id": pin_id}
 
+        # Светодиоды
         for comp in self.scene.components:
             if comp.component_type == "led" and len(comp.pins) >= 2:
-                comp.sim_led_lit = self.power_on and self._is_led_lit(comp, uf, gnd_ids)
+                comp.sim_led_lit = self.power_on and self._is_led_lit(comp, uf, gnd_ids, power_ids)
                 comp.update()
             elif comp.component_type == "buzzer" and len(comp.pins) >= 2:
                 comp.sim_buzzer_active = self.power_on and self._is_buzzer_active(comp, uf, gnd_ids)
                 comp.update()
 
+        # Тихая подсветка неисправностей (без попапа — в tick вызывается часто)
         if self.power_on:
-            faults = self.analyzer.analyze(self.scene.components, self.scene.wire_pairs(), board_pin_states, True)
+            faults = self.analyzer.analyze(
+                self.scene.components, self.scene.wire_pairs(), board_pin_states, True
+            )
             if faults:
                 self.scene.apply_faults(faults)
                 self.error_occurred.emit("; ".join(f.message for f in faults[:3]))
 
-    def _is_led_lit(self, led, uf, gnd_ids):
+    def _check_faults_with_popup(self):
+        """
+        Проверка неисправностей с отправкой сигнала faults_detected —
+        main_window показывает всплывающее окно с деталями.
+        Вызывается только при подаче питания и при загрузке кода,
+        не чаще раза в 3 секунды (защита от спама).
+        """
+        now = time.time()
+        if now - self._last_fault_time < 3.0:
+            return
+        uf = self._build_unionfind()
+        all_gnd = self._all_ids_for(GND_PIN_KEYS)
+        all_pwr = self._all_ids_for(POWER_PIN_KEYS) if self.power_on else []
+        gnd_ids = set(all_gnd)
+        power_ids = set(all_pwr)
+
+        board_pin_states = {}
+        for key, idx in self.pin_index.items():
+            pin_id = "UNO:%d" % idx
+            is_gnd = any(uf.find(g) == uf.find(pin_id) for g in gnd_ids)
+            is_pwr = any(uf.find(p) == uf.find(pin_id) for p in power_ids)
+            if is_gnd:
+                role = "gnd"
+            elif is_pwr:
+                role = "power"
+            elif self.pin_modes.get(key) == 1 and key in self.digital_state:
+                role = "digital_high" if self.digital_state[key] else "digital_low"
+            else:
+                role = "floating"
+            board_pin_states[key] = {"role": role, "pin_id": pin_id}
+
+        faults = self.analyzer.analyze(
+            self.scene.components, self.scene.wire_pairs(), board_pin_states, True
+        )
+        if faults:
+            self._last_fault_time = now
+            self.scene.apply_faults(faults)
+            # Этот сигнал поймает main_window и покажет QMessageBox
+            self.faults_detected.emit([f.message for f in faults])
+
+    # Проверка горения LED / зуммера
+    def _is_led_lit(self, led, uf, gnd_ids, power_ids):
         anode_net = uf.find(led.pins[0].pin_id)
         cathode_net = uf.find(led.pins[1].pin_id)
+        # Катод должен быть в земле (любой из GND-пинов)
         cathode_grounded = any(uf.find(g) == cathode_net for g in gnd_ids)
-        return cathode_grounded and self._net_is_hot(anode_net, uf)
+        if not cathode_grounded:
+            return False
+        # Анод должен быть "горячим" — от 5V/VIN или от digital HIGH
+        return self._net_is_hot(anode_net, uf, power_ids)
 
     def _is_buzzer_active(self, buzzer, uf, gnd_ids):
         plus_net = uf.find(buzzer.pins[0].pin_id)
@@ -256,21 +341,25 @@ class SimulationEngine(QObject):
         minus_grounded = any(uf.find(g) == minus_net for g in gnd_ids)
         if not minus_grounded:
             return False
+        all_pwr = self._all_ids_for(POWER_PIN_KEYS)
         for key in self.tone_state:
             pid = self._board_pin_id(key)
             if pid and uf.find(pid) == plus_net:
                 return True
-        return self._net_is_hot(plus_net, uf)
+        return self._net_is_hot(plus_net, uf, set(all_pwr))
 
-    def _net_is_hot(self, net, uf):
-        for pid in self._ids_for(POWER_PIN_KEYS):
+    def _net_is_hot(self, net, uf, power_ids):
+        # Прямое питание от 5V/VIN
+        for pid in power_ids:
             if uf.find(pid) == net:
                 return True
+        # Цифровой пин в режиме OUTPUT со значением HIGH
         for key, val in self.digital_state.items():
             if val and self.pin_modes.get(key) == 1:
                 pid = self._board_pin_id(key)
                 if pid and uf.find(pid) == net:
                     return True
+        # analogWrite (PWM > 0 считается как "есть ток")
         for key, val in self.analog_pwm.items():
             if val > 0:
                 pid = self._board_pin_id(key)

@@ -430,3 +430,18 @@ def uno_pin_index_by_key() -> dict:
         key = pin_canonical_key(pin["name"])
         mapping.setdefault(key, i)
     return mapping
+
+
+def uno_all_pin_ids_by_key() -> dict:
+    """
+    Канонический ключ -> список ВСЕХ "UNO:{i}" для этого ключа.
+    Критически важно для GND (индексы 1, 20, 21) и VIN/5V:
+    старая версия возвращала только первый GND (index=1), из-за чего
+    подключение к GND на нижнем ряду платы (index=20) не распознавалось
+    как земля и LED не светился / неисправности не выявлялись.
+    """
+    mapping = {}
+    for i, pin in enumerate(build_uno_pins()):
+        key = pin_canonical_key(pin["name"])
+        mapping.setdefault(key, []).append("UNO:%d" % i)
+    return mapping
