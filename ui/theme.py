@@ -84,21 +84,26 @@ QStatusBar {{
 }}
 
 QPushButton {{
-    background-color: {BG_INPUT};
-    color: {TEXT_PRIMARY};
-    border: 1px solid {BORDER};
+    background-color: #3a3a3a;
+    color: #e8e8e8;
+    border: 1px solid #5a5a5a;
     border-radius: 4px;
     padding: 6px 14px;
+    font-weight: 500;
 }}
 QPushButton:hover {{
     background-color: {ACCENT_HOVER};
+    border-color: {ACCENT_HOVER};
     color: white;
 }}
 QPushButton:pressed {{
     background-color: {ACCENT_PRESSED};
+    border-color: {ACCENT_PRESSED};
 }}
 QPushButton:disabled {{
+    background-color: #2a2a2a;
     color: {TEXT_DISABLED};
+    border-color: #333333;
 }}
 
 QPushButton#PrimaryButton {{
@@ -111,18 +116,22 @@ QPushButton#PrimaryButton:hover {{
 }}
 
 QPushButton#ActivityButton {{
-    background-color: transparent;
+    background-color: #333333;
     border: none;
     border-left: 2px solid transparent;
     border-radius: 0px;
     padding: 10px;
+    color: #bbbbbb;
+    font-size: 16px;
 }}
 QPushButton#ActivityButton:hover {{
-    background-color: {BG_INPUT};
+    background-color: #484848;
+    color: white;
 }}
 QPushButton#ActivityButton:checked {{
     border-left: 2px solid {ACCENT};
     background-color: {BG_DARK};
+    color: white;
 }}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QListWidget {{
