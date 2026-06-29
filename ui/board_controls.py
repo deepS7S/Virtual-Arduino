@@ -26,6 +26,13 @@ TOTAL_H = BTN_H + LABEL_H   # полная высота виджета (для b
 RADIUS = 5        # скругление углов
 
 
+def _make_grad(top: QColor, bot: QColor) -> QLinearGradient:
+    g = QLinearGradient(QPointF(0, 0), QPointF(0, BTN_H))
+    g.setColorAt(0, top)
+    g.setColorAt(1, bot)
+    return g
+
+
 class _BoardButton(QGraphicsItem):
     """
     Базовый класс кнопки на плате: прямоугольник с фаской + иконка + подпись.
@@ -35,94 +42,90 @@ class _BoardButton(QGraphicsItem):
                  on_click, idle_top, idle_bot, active_top, active_bot,
                  border_idle, border_active):
         super().__init__(parent_board)
-        self.on_click = on_click
-        self.icon_text = icon_text
-        self.label_text = label_text
-
-        # Цвета градиента тела (idle)
-        self.idle_top = QColor(idle_top)
-        self.idle_bot = QColor(idle_bot)
-        # Цвета градиента тела (active / pressed)
-        self.active_top = QColor(active_top)
-        self.active_bot = QColor(active_bot)
-        self.border_idle = QColor(border_idle)
-        self.border_active = QColor(border_active)
-
-        self.active = False
-        self._hovered = False
-        self._pressed = False
+        self.on_click    = on_click
+        self.icon_text   = icon_text
+        self.label_text  = label_text
+        self.active      = False
+        self._hovered    = False
+        self._pressed    = False
 
         self.setToolTip(tooltip)
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptHoverEvents(True)
         self.setZValue(50)
 
+        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
+
+        it  = QColor(idle_top);   ib  = QColor(idle_bot)
+        at  = QColor(active_top); ab  = QColor(active_bot)
+
+        self._grad_idle         = _make_grad(it, ib)
+        self._grad_idle_hover   = _make_grad(it.lighter(115), ib.lighter(115))
+        self._grad_active       = _make_grad(ab, at)          # инверт. (утопленность)
+        self._grad_active_hover = _make_grad(ab.lighter(110), at.lighter(110))
+
+        self._brush_shadow = QBrush(QColor(0, 0, 0, 80))
+
+        self._pen_idle   = QPen(QColor(border_idle),   1.5)
+        self._pen_active = QPen(QColor(border_active), 1.5)
+        self._pen_bevel  = QPen(QColor(255, 255, 255, 55), 1)
+
+        # Цвета текста
+        self._icon_color_normal = QColor("#ffffff")
+        self._icon_color_down   = QColor("#e0e0e0")
+        self._label_color_idle  = QColor("#c8c8c8")
+        self._label_color_active = QColor(border_active).lighter(140)
+
+        # Шрифты
+        self._font_icon = QFont("Segoe UI", 14, QFont.Bold)
+        self._font_label = QFont("Segoe UI", 6, QFont.Bold)
+        self._font_label.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
+
+        self._body_rect   = QRectF(0,   0,   BTN_W,     BTN_H)
+        self._shadow_rect = QRectF(2,   2,   BTN_W,     BTN_H)
+        self._bevel_rect  = QRectF(1.5, 1.5, BTN_W - 3, BTN_H - 3)
+        self._icon_rect   = QRectF(0,  -1,   BTN_W,     BTN_H)
+        self._label_rect  = QRectF(0,   BTN_H + 1, BTN_W, LABEL_H)
+
     def boundingRect(self):
         return QRectF(-2, -2, BTN_W + 4, TOTAL_H + 4)
 
     def set_active(self, active):
-        self.active = active
-        self.update()
+        if self.active != active:
+            self.active = active
+            self.update()
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.Antialiasing)
 
-        body = QRectF(0, 0, BTN_W, BTN_H)
         is_down = self.active or self._pressed
 
-        # --- Градиент тела ---
-        grad = QLinearGradient(QPointF(0, 0), QPointF(0, BTN_H))
         if is_down:
-            # Активное/нажатое: инвертируем градиент (эффект утопленности)
-            top_c = self.active_bot
-            bot_c = self.active_top
+            grad = self._grad_active_hover if self._hovered else self._grad_active
         else:
-            top_c = self.idle_top
-            bot_c = self.idle_bot
-        if self._hovered and not is_down:
-            top_c = top_c.lighter(115)
-            bot_c = bot_c.lighter(115)
-        grad.setColorAt(0, top_c)
-        grad.setColorAt(1, bot_c)
+            grad = self._grad_idle_hover   if self._hovered else self._grad_idle
 
-        # --- Тень под кнопкой (имитация рельефа) ---
-        shadow_rect = QRectF(2, 2, BTN_W, BTN_H)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(QColor(0, 0, 0, 80)))
-        painter.drawRoundedRect(shadow_rect, RADIUS, RADIUS)
+        painter.setBrush(self._brush_shadow)
+        painter.drawRoundedRect(self._shadow_rect, RADIUS, RADIUS)
 
-        # --- Основное тело ---
-        border_color = self.border_active if is_down else self.border_idle
-        pen = QPen(border_color, 1.5)
-        painter.setPen(pen)
+        painter.setPen(self._pen_active if is_down else self._pen_idle)
         painter.setBrush(QBrush(grad))
-        painter.drawRoundedRect(body, RADIUS, RADIUS)
+        painter.drawRoundedRect(self._body_rect, RADIUS, RADIUS)
 
         # --- Верхняя фаска (светлая полоска — 3D-эффект выступания) ---
         if not is_down:
-            highlight = QColor(255, 255, 255, 55)
-            bevel_pen = QPen(highlight, 1)
-            painter.setPen(bevel_pen)
+            painter.setPen(self._pen_bevel)
             painter.setBrush(Qt.NoBrush)
-            bevel = QRectF(1.5, 1.5, BTN_W - 3, BTN_H - 3)
-            painter.drawRoundedRect(bevel, RADIUS - 1, RADIUS - 1)
+            painter.drawRoundedRect(self._bevel_rect, RADIUS - 1, RADIUS - 1)
 
-        # --- Иконка ---
-        icon_color = QColor("#ffffff") if not is_down else QColor("#e0e0e0")
-        painter.setPen(icon_color)
-        font_icon = QFont("Segoe UI", 14, QFont.Bold)
-        painter.setFont(font_icon)
-        icon_rect = QRectF(0, -1, BTN_W, BTN_H)
-        painter.drawText(icon_rect, Qt.AlignCenter, self.icon_text)
+        painter.setPen(self._icon_color_down if is_down else self._icon_color_normal)
+        painter.setFont(self._font_icon)
+        painter.drawText(self._icon_rect, Qt.AlignCenter, self.icon_text)
 
-        # --- Подпись под кнопкой ---
-        label_rect = QRectF(0, BTN_H + 1, BTN_W, LABEL_H)
-        label_color = QColor("#c8c8c8") if not is_down else QColor(self.border_active).lighter(140)
-        painter.setPen(label_color)
-        font_label = QFont("Segoe UI", 6, QFont.Bold)
-        font_label.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
-        painter.setFont(font_label)
-        painter.drawText(label_rect, Qt.AlignHCenter | Qt.AlignTop, self.label_text)
+        painter.setPen(self._label_color_active if is_down else self._label_color_idle)
+        painter.setFont(self._font_label)
+        painter.drawText(self._label_rect, Qt.AlignHCenter | Qt.AlignTop, self.label_text)
 
     # --- Интерактивность ---
     def hoverEnterEvent(self, event):
@@ -180,14 +183,9 @@ class PowerButton(_BoardButton):
             label_text="POWER",
             tooltip="Подать / отключить питание (5V)",
             on_click=on_click,
-            # idle: тёмно-серый
-            idle_top="#424242",
-            idle_bot="#212121",
-            # active: красный
-            active_top="#ef5350",
-            active_bot="#b71c1c",
-            border_idle="#757575",
-            border_active="#ff8a80",
+            idle_top="#424242", idle_bot="#212121",
+            active_top="#ef5350", active_bot="#b71c1c",
+            border_idle="#757575", border_active="#ff8a80",
         )
 
 
