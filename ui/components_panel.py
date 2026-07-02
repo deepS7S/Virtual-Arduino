@@ -57,9 +57,17 @@ class ComponentsPanel(QWidget):
 
         self.list_widget = QListWidget()
         self.list_widget.setSpacing(4)
+
+        WIP_TYPES = {"button", "potentiometer", "buzzer", "photoresistor", "servo", "dc_motor"}
+
         for component_type in COMPONENT_ORDER:
             spec = COMPONENT_SPECS[component_type]
-            item = QListWidgetItem(f"  {spec['label']}")
+            label = spec["label"]
+            if component_type in WIP_TYPES:
+                label = f"  {label} (WIP)"
+            else:
+                label = f"  {label}"
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, component_type)
             item.setForeground(QColor(spec["color"]))
             self.list_widget.addItem(item)
