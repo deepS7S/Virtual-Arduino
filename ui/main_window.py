@@ -196,8 +196,11 @@ class MainWindow(QWidget):
         save_btn = QPushButton("Сохранить")
         save_btn.setObjectName("PrimaryButton")
         save_btn.clicked.connect(self._on_save_project)
+        exit_btn = QPushButton("На главную")
+        exit_btn.setToolTip("Вернуться на стартовый экран")
+        exit_btn.clicked.connect(self._on_exit_to_start)
 
-        for b in (new_btn, open_btn, save_btn):
+        for b in (new_btn, open_btn, save_btn, exit_btn):
             b.setFixedHeight(32)
             layout.addWidget(b)
 
@@ -349,4 +352,34 @@ class MainWindow(QWidget):
         self.project = project
         self.circuit_scene.load_from_dict({"components": [], "wires": []})
         self._load_project_into_ui()
+
+    def _on_exit_to_start(self):
+        """Выход на стартовый экран с предложением сохранить проект."""
+        reply = QMessageBox.question(
+            self,
+            "Выход на главную",
+            "Сохранить проект перед выходом?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if reply == QMessageBox.Cancel:
+            return
+        if reply == QMessageBox.Save:
+            self._on_save_project()
+
+        if self.sim_engine and self.sim_engine.running:
+            self.sim_engine.stop()
+
+        from ui.start_screen import StartScreen
+        self._start_screen = StartScreen()
+        self._start_screen.on_project_ready = self._reopen_project
+        self._start_screen.show()
+        self.close()
+
+    def _reopen_project(self, project):
+        """Открывает проект из стартового экрана, заменяя текущее окно."""
+        self._start_screen.close()
+        new_window = MainWindow(project)
+        new_window.show()
+        self._start_screen = None
 
