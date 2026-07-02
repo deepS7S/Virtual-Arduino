@@ -26,6 +26,44 @@ from PyQt5.QtWidgets import (
 from ui.theme import ACCENT, BG_DARK, BG_INPUT, TEXT_PRIMARY
 
 
+_FIELD_STYLE = """
+    QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
+        background-color: #2d2d2d;
+        color: #d4d4d4;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 6px;
+        selection-background-color: transparent;
+        selection-color: #d4d4d4;
+    }
+    QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus, QComboBox:focus {
+        border: 1px solid #00979D;
+        outline: none;
+    }
+    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QSpinBox::down-button, QDoubleSpinBox::down-button {
+        background-color: #3a3a3a;
+        border: none;
+        width: 18px;
+    }
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+        background-color: #00979D;
+    }
+    QComboBox::drop-down {
+        border: none;
+        background-color: #3a3a3a;
+        width: 22px;
+    }
+    QComboBox QAbstractItemView {
+        background-color: #2d2d2d;
+        color: #d4d4d4;
+        selection-background-color: #00979D;
+        border: 1px solid #444;
+    }
+"""
+
+
 class ComponentSettingsDialog(QDialog):
     """Диалог настройки параметров компонента."""
 
@@ -36,7 +74,7 @@ class ComponentSettingsDialog(QDialog):
         self.widgets = {}
 
         self.setWindowTitle(f"Настройки компонента — {component.spec['label']}")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(420)
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {BG_DARK};
@@ -44,6 +82,7 @@ class ComponentSettingsDialog(QDialog):
             QLabel {{
                 color: {TEXT_PRIMARY};
             }}
+            {_FIELD_STYLE}
         """)
 
         self._build_ui()
@@ -59,7 +98,9 @@ class ComponentSettingsDialog(QDialog):
 
         # Форма с параметрами
         form = QFormLayout()
-        form.setSpacing(8)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         spec_params = self.component.spec.get("params", {})
         for param_name, param_config in spec_params.items():
@@ -122,31 +163,35 @@ class ComponentSettingsDialog(QDialog):
 
         elif param_type == "color":
             container = QWidget()
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(4)
+            container.setStyleSheet("background: transparent;")
+            row = QHBoxLayout(container)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
 
             color_btn = QPushButton("Выбрать цвет")
-            color_btn.setFixedWidth(100)
+            color_btn.setMinimumWidth(110)
+            color_btn.setMaximumWidth(130)
 
             color_preview = QLabel()
-            color_preview.setFixedSize(30, 30)
+            color_preview.setFixedSize(28, 28)
             color_preview.setStyleSheet(
                 f"background-color: {current_value}; border: 1px solid #555; border-radius: 4px;")
 
-            def on_color_click():
-                color = QColorDialog.getColor(QColor(current_value), self, "Выберите цвет")
+            def on_color_click(checked=False, _btn=color_btn, _prev=color_preview, _val=[current_value]):
+                color = QColorDialog.getColor(QColor(_val[0]), self, "Выберите цвет")
                 if color.isValid():
                     hex_color = color.name()
-                    color_preview.setStyleSheet(
+                    _val[0] = hex_color
+                    _prev.setStyleSheet(
                         f"background-color: {hex_color}; border: 1px solid #555; border-radius: 4px;")
-                    color_btn.setProperty("color", hex_color)
+                    _btn.setProperty("color", hex_color)
 
             color_btn.clicked.connect(on_color_click)
             color_btn.setProperty("color", current_value)
 
-            layout.addWidget(color_btn)
-            layout.addWidget(color_preview)
+            row.addWidget(color_btn)
+            row.addWidget(color_preview)
+            row.addStretch()
             return container
 
         elif param_type == "str":
